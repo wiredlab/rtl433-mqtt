@@ -1,0 +1,15 @@
+[Unit]
+Description=Receive and decode ISM devices to MQTT
+After=network-online.target
+Wants=network-online.target
+StartLimitIntervalSec=0
+
+[Service]
+Type=simple
+Restart=always
+RestartSec=10
+ExecStart=PREFIX/bin/rtl433-mqtt
+EnvironmentFile=-/etc/default/rtl433-mqtt.env
+
+[Install]
+WantedBy=multi-user.target

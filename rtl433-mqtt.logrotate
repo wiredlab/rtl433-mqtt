@@ -1,0 +1,18 @@
+# part of rtl433-mqtt script
+#   * create the directory
+#   * install logrotate (sudo apt install logrotate)
+#   * copy this script to /etc/logrotate.d/
+#   * modify or delete "olddir"
+/var/log/rtl433/rtl433.log {
+    compress
+    rotate 520
+    weekly
+    missingok
+    olddir /space/wiredlab/rtl433
+    dateext
+    dateformat _%Y-%m-%d
+    renamecopy
+    postrotate
+        systemctl restart rtl433-mqtt
+    endscript
+}

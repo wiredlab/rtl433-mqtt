@@ -1,0 +1,5 @@
+# derived file
+rtl433-mqtt.service
+
+# contains secrets!
+rtl433-mqtt.env

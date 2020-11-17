@@ -1,0 +1,103 @@
+#!/bin/bash
+
+# set -e  # disabled because we want to handle the pipe failure ourself
+set -u  # fail if there are unset (environment) variables
+set -o pipefail  # exit value of pipeline is that of the nonzero program
+
+
+#
+# MQTT setup
+#
+# need these environment variables set:
+#  MQTT_HOST="mqtt.example.com"
+#  MQTT_PORT=8883
+#  MQTT_USER="username"
+#  MQTT_PASS="password"
+
+
+RECEIVER_FREQ="${RECEIVER_FREQ:-433.92M}"
+RECEIVER_ID="${RECEIVER_ID:-$HOSTNAME}"
+
+
+
+TOPIC_PREFIX="${MQTT_TOPIC_PREFIX:-valpo/rtl433}"
+TOPIC="${TOPIC_PREFIX}/${RECEIVER_ID}"
+
+URL="mqtts://${MQTT_USER}:${MQTT_PASS}@${MQTT_HOST}:${MQTT_PORT}/${TOPIC}"
+
+
+#
+# rtl_433 setup
+#
+RTLOPTS="${RTL433_OPTS:-}"
+RTLOPTS+=" -f ${RECEIVER_FREQ}"
+#RTLOPTS+=" -R 113"   # Ambient Weather WH31E
+RTLOPTS+=" -F json"
+
+RTLOPTS+=" -M time:utc:iso:usec"
+RTLOPTS+=" -M protocol"
+RTLOPTS+=" -M level"
+RTLOPTS+=" -M stats:1:30"
+
+#
+# MQTT with mosquitto_pub setup
+#
+MOSQUITTO_OPTS="-q 1"
+MOSQUITTO_OPTS+=" --capath /etc/ssl/certs"
+MOSQUITTO_OPTS+=" --will-topic '${TOPIC}/status'"
+MOSQUITTO_OPTS+=" --will-payload '{\"state\":\"lost-connection\"}'"
+MOSQUITTO_OPTS+=" --will-qos 1"
+
+# rtl_433 handling mqtt directly (payload is JSON formatted)
+#RTLOPTS+=" -F mqtt://${MQTT_HOST}:${MQTT_PORT},user=${MQTT_USER},pass=${MQTT_PASS}"
+#RTLOPTS+=",events=${TOPIC}/data"  # decoded data from successful packet
+#RTLOPTS+=",states=${TOPIC}/states"  # summary information
+
+echo "mosquitto-opts: ${MOSQUITTO_OPTS}"
+echo "topic-base: ${TOPIC}"
+echo "rtl_433-opts: ${RTLOPTS}"
+
+
+#
+# Local logging setup
+#
+# Add the "tee" line to the Main Event pipeline before mosquitto_pub.  See
+# rtl433-mqtt.logrotate for an easy way to manage the size of the log file.
+#
+#LOGDIR="/var/log/rtl433"
+#LOGFILE="${LOGDIR}/rtl433.log"
+#mkdir -p "${LOGDIR}"
+#    | tee -a "${LOGFILE}" \
+
+
+
+# send a connect message before the main pipe
+mosquitto_pub ${MOSQUITTO_OPTS} \
+    --url "${URL}/status" \
+    --retain -m "{\"state\":\"connected\"}"
+
+
+# the Main Event
+rtl_433 ${RTLOPTS} \
+    |  mosquitto_pub ${MOSQUITTO_OPTS} \
+        --url "${URL}/data" \
+        -l
+retval=$?
+
+# send a disconnect message to indicate whether the main pipe was intentionally
+# stopped or something went wrong
+if [ $retval -eq 0 ]; then
+    message='{"state":"disconnected"}'
+else
+    message="{\"state\":\"rtl_433 pipe exit $?\"}"
+fi
+
+mosquitto_pub ${MOSQUITTO_OPTS} \
+    --url "${URL}/status" \
+    --retain -m "${message}"
+
+# The exit status of this script is not useful, since we already have
+# (attempted to) send a status message via MQTT.  In the context of a systemd
+# service, we always want to restart the script when it exits if not otherwise
+# commanded to shut down.
+exit 1
