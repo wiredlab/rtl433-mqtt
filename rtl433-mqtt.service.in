@@ -1,15 +1,17 @@
+# Compatibility copy. The installer uses deploy/rtl433-mqtt.service.
+
 [Unit]
 Description=Receive and decode ISM devices to MQTT
-After=network-online.target
-Wants=network-online.target
-StartLimitIntervalSec=0
+After=local-fs.target
+RequiresMountsFor=/var/log/rtl433-mqtt
 
 [Service]
 Type=simple
+EnvironmentFile=/etc/rtl433-mqtt/rtl433-mqtt.env
+WorkingDirectory=/opt/rtl433-mqtt
+ExecStart=/opt/rtl433-mqtt/rtl433-mqtt
 Restart=always
-RestartSec=10
-ExecStart=PREFIX/bin/rtl433-mqtt
-EnvironmentFile=-/etc/default/rtl433-mqtt.env
+RestartSec=5
 
 [Install]
 WantedBy=multi-user.target

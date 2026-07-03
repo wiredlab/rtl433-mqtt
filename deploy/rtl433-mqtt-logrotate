@@ -1,0 +1,13 @@
+/var/log/rtl433-mqtt/*.jsonl {
+    daily
+    rotate 30
+    dateext
+    dateformat _%Y-%m-%d
+    compress
+    missingok
+    notifempty
+    create 0640 root root
+    postrotate
+        systemctl restart rtl433-mqtt.service >/dev/null 2>&1 || true
+    endscript
+}

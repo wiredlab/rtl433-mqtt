@@ -1,0 +1,15 @@
+[Unit]
+Description=Receive and decode ISM devices to MQTT
+After=local-fs.target
+RequiresMountsFor=/var/log/rtl433-mqtt
+
+[Service]
+Type=simple
+EnvironmentFile=/etc/rtl433-mqtt/rtl433-mqtt.env
+WorkingDirectory=/opt/rtl433-mqtt
+ExecStart=/opt/rtl433-mqtt/rtl433-mqtt
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

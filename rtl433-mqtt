@@ -1,103 +1,169 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# set -e  # disabled because we want to handle the pipe failure ourself
-set -u  # fail if there are unset (environment) variables
-set -o pipefail  # exit value of pipeline is that of the nonzero program
+error() {
+    printf 'rtl433-mqtt: %s\n' "$*" >&2
+    exit 1
+}
 
+enabled() {
+    case "${1:-1}" in
+        0|false|FALSE|no|NO|off|OFF)
+            return 1
+            ;;
+        *)
+            return 0
+            ;;
+    esac
+}
 
-#
-# MQTT setup
-#
-# need these environment variables set:
-#  MQTT_HOST="mqtt.example.com"
-#  MQTT_PORT=8883
-#  MQTT_USER="username"
-#  MQTT_PASS="password"
+append_mqtt_option() {
+    local option="$1"
+    if [[ -z "$mqtt_options" ]]; then
+        mqtt_options="$option"
+    else
+        mqtt_options="${mqtt_options},${option}"
+    fi
+}
 
+print_command() {
+    if [[ -n "${MQTT_USERNAME:-}" ]]; then
+        printf 'MQTT_USERNAME=<redacted> '
+    fi
+    if [[ -n "${MQTT_PASSWORD:-}" ]]; then
+        printf 'MQTT_PASSWORD=<redacted> '
+    fi
+    printf 'exec'
+    printf ' %s' "${cmd[@]}"
+    printf '\n'
+}
 
 RECEIVER_FREQ="${RECEIVER_FREQ:-433.92M}"
-RECEIVER_ID="${RECEIVER_ID:-$HOSTNAME}"
+RECEIVER_ID="${RECEIVER_ID:-${HOSTNAME:-unknown}}"
 
-
-
-TOPIC_PREFIX="${MQTT_TOPIC_PREFIX:-valpo/rtl433}"
-TOPIC="${TOPIC_PREFIX}/${RECEIVER_ID}"
-
-URL="mqtts://${MQTT_USER}:${MQTT_PASS}@${MQTT_HOST}:${MQTT_PORT}/${TOPIC}"
-
-
-#
-# rtl_433 setup
-#
-RTLOPTS="${RTL433_OPTS:-}"
-RTLOPTS+=" -f ${RECEIVER_FREQ}"
-#RTLOPTS+=" -R 113"   # Ambient Weather WH31E
-RTLOPTS+=" -F json"
-
-RTLOPTS+=" -M time:utc:iso:usec"
-RTLOPTS+=" -M protocol"
-RTLOPTS+=" -M level"
-RTLOPTS+=" -M stats:1:30"
-
-#
-# MQTT with mosquitto_pub setup
-#
-MOSQUITTO_OPTS="-q 1"
-MOSQUITTO_OPTS+=" --capath /etc/ssl/certs"
-MOSQUITTO_OPTS+=" --will-topic '${TOPIC}/status'"
-MOSQUITTO_OPTS+=" --will-payload '{\"state\":\"lost-connection\"}'"
-MOSQUITTO_OPTS+=" --will-qos 1"
-
-# rtl_433 handling mqtt directly (payload is JSON formatted)
-#RTLOPTS+=" -F mqtt://${MQTT_HOST}:${MQTT_PORT},user=${MQTT_USER},pass=${MQTT_PASS}"
-#RTLOPTS+=",events=${TOPIC}/data"  # decoded data from successful packet
-#RTLOPTS+=",states=${TOPIC}/states"  # summary information
-
-echo "mosquitto-opts: ${MOSQUITTO_OPTS}"
-echo "topic-base: ${TOPIC}"
-echo "rtl_433-opts: ${RTLOPTS}"
-
-
-#
-# Local logging setup
-#
-# Add the "tee" line to the Main Event pipeline before mosquitto_pub.  See
-# rtl433-mqtt.logrotate for an easy way to manage the size of the log file.
-#
-#LOGDIR="/var/log/rtl433"
-#LOGFILE="${LOGDIR}/rtl433.log"
-#mkdir -p "${LOGDIR}"
-#    | tee -a "${LOGFILE}" \
-
-
-
-# send a connect message before the main pipe
-mosquitto_pub ${MOSQUITTO_OPTS} \
-    --url "${URL}/status" \
-    --retain -m "{\"state\":\"connected\"}"
-
-
-# the Main Event
-rtl_433 ${RTLOPTS} \
-    |  mosquitto_pub ${MOSQUITTO_OPTS} \
-        --url "${URL}/data" \
-        -l
-retval=$?
-
-# send a disconnect message to indicate whether the main pipe was intentionally
-# stopped or something went wrong
-if [ $retval -eq 0 ]; then
-    message='{"state":"disconnected"}'
+MQTT_HOST="${MQTT_HOST:-localhost}"
+MQTT_TLS="${MQTT_TLS:-0}"
+if enabled "$MQTT_TLS"; then
+    MQTT_SCHEME="mqtts"
+    MQTT_PORT="${MQTT_PORT:-8883}"
 else
-    message="{\"state\":\"rtl_433 pipe exit $?\"}"
+    MQTT_SCHEME="mqtt"
+    MQTT_PORT="${MQTT_PORT:-1883}"
 fi
 
-mosquitto_pub ${MOSQUITTO_OPTS} \
-    --url "${URL}/status" \
-    --retain -m "${message}"
+MQTT_TOPIC_PREFIX="${MQTT_TOPIC_PREFIX:-rtl433}"
+MQTT_BASE_TOPIC="${MQTT_BASE_TOPIC:-${MQTT_TOPIC_PREFIX}/${RECEIVER_ID}}"
+MQTT_RETAIN="${MQTT_RETAIN:-0}"
 
-# The exit status of this script is not useful, since we already have
-# (attempted to) send a status message via MQTT.  In the context of a systemd
-# service, we always want to restart the script when it exits if not otherwise
-# commanded to shut down.
-exit 1
+MQTT_ENABLE_AVAILABILITY="${MQTT_ENABLE_AVAILABILITY:-1}"
+MQTT_ENABLE_EVENTS="${MQTT_ENABLE_EVENTS:-1}"
+MQTT_ENABLE_STATES="${MQTT_ENABLE_STATES:-1}"
+MQTT_ENABLE_DEVICES="${MQTT_ENABLE_DEVICES:-1}"
+
+RTL433_EVENT_LOG="${RTL433_EVENT_LOG:-/var/log/rtl433-mqtt/rtl433-events.jsonl}"
+RTL433_LOG_JSONL="${RTL433_LOG_JSONL:-1}"
+
+if [[ -z "${MQTT_USERNAME:-}" && -n "${MQTT_USER:-}" ]]; then
+    export MQTT_USERNAME="$MQTT_USER"
+fi
+if [[ -z "${MQTT_PASSWORD:-}" && -n "${MQTT_PASS:-}" ]]; then
+    export MQTT_PASSWORD="$MQTT_PASS"
+fi
+
+if [[ -n "${MQTT_USERNAME:-}" ]]; then
+    export MQTT_USERNAME
+fi
+if [[ -n "${MQTT_PASSWORD:-}" ]]; then
+    export MQTT_PASSWORD
+fi
+
+if [[ -n "${MQTT_TLS_CERT:-}" || -n "${MQTT_TLS_KEY:-}" ]]; then
+    [[ -n "${MQTT_TLS_CERT:-}" && -n "${MQTT_TLS_KEY:-}" ]] \
+        || error "MQTT_TLS_CERT and MQTT_TLS_KEY must be set together"
+fi
+
+if enabled "$MQTT_TLS"; then
+    if command -v rtl_433 >/dev/null 2>&1; then
+        rtl_version="$(rtl_433 -V 2>&1 || true)"
+        [[ "$rtl_version" == *"with TLS"* ]] \
+            || error "MQTT_TLS=1 requires an rtl_433 binary built with TLS support"
+    fi
+fi
+
+mqtt_options=""
+append_mqtt_option "retain=${MQTT_RETAIN}"
+append_mqtt_option "base=${MQTT_BASE_TOPIC}"
+
+enabled_count=0
+if enabled "$MQTT_ENABLE_AVAILABILITY"; then
+    append_mqtt_option "availability"
+    enabled_count=$((enabled_count + 1))
+fi
+if enabled "$MQTT_ENABLE_EVENTS"; then
+    append_mqtt_option "events"
+    enabled_count=$((enabled_count + 1))
+fi
+if enabled "$MQTT_ENABLE_STATES"; then
+    append_mqtt_option "states"
+    enabled_count=$((enabled_count + 1))
+fi
+if enabled "$MQTT_ENABLE_DEVICES"; then
+    append_mqtt_option "devices"
+    enabled_count=$((enabled_count + 1))
+fi
+
+[[ "$enabled_count" -gt 0 ]] || error "at least one MQTT output category must be enabled"
+
+if enabled "$MQTT_TLS"; then
+    if [[ -n "${MQTT_TLS_CA_CERT:-}" ]]; then
+        append_mqtt_option "tls_ca_cert=${MQTT_TLS_CA_CERT}"
+    fi
+    if [[ -n "${MQTT_TLS_CERT:-}" ]]; then
+        append_mqtt_option "tls_cert=${MQTT_TLS_CERT}"
+        append_mqtt_option "tls_key=${MQTT_TLS_KEY}"
+    fi
+fi
+
+mqtt_output="${MQTT_SCHEME}://${MQTT_HOST}:${MQTT_PORT},${mqtt_options}"
+
+cmd=(rtl_433)
+
+if [[ -n "${RTL433_OPTS:-}" ]]; then
+    # Intentionally supports simple whitespace-separated rtl_433 options, matching
+    # the historical env file usage such as RTL433_OPTS="-R 113".
+    read -r -a extra_opts <<< "$RTL433_OPTS"
+    cmd+=("${extra_opts[@]}")
+fi
+
+cmd+=(
+    -f "$RECEIVER_FREQ"
+    -F "$mqtt_output"
+)
+
+if enabled "$RTL433_LOG_JSONL"; then
+    if [[ -z "${RTL433_MQTT_PRINT_COMMAND:-}" ]]; then
+        log_dir="$(dirname "$RTL433_EVENT_LOG")"
+        mkdir -p "$log_dir" || error "cannot create log directory: $log_dir"
+        [[ -w "$log_dir" ]] || error "log directory is not writable: $log_dir"
+    fi
+    cmd+=(-F "json:${RTL433_EVENT_LOG}")
+fi
+
+cmd+=(
+    -M time:utc:iso:usec
+    -M protocol
+    -M level
+    -M stats:1:30
+)
+
+if [[ -n "${RTL433_MQTT_PRINT_COMMAND:-}" ]]; then
+    print_command
+    exit 0
+fi
+
+printf 'rtl_433 version: %s\n' "$(rtl_433 -V 2>&1 || printf 'unknown')"
+printf 'mqtt-target: %s://%s:%s\n' "$MQTT_SCHEME" "$MQTT_HOST" "$MQTT_PORT"
+printf 'mqtt-base-topic: %s\n' "$MQTT_BASE_TOPIC"
+printf 'jsonl-log: %s\n' "$RTL433_EVENT_LOG"
+
+exec "${cmd[@]}"
