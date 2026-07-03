@@ -189,3 +189,22 @@ class Rtl433MqttDocsTests(unittest.TestCase):
         for text in required:
             with self.subTest(text=text):
                 self.assertIn(text, doc)
+
+    def test_docs_include_topic_construction_examples(self):
+        readme = (ROOT / "README.md").read_text(encoding="utf-8")
+        deployment = (ROOT / "docs" / "rtl433-mqtt-service-deployment.md").read_text(
+            encoding="utf-8"
+        )
+        combined = readme + "\n" + deployment
+
+        examples = [
+            "MQTT_TOPIC_PREFIX=rtl433",
+            "RECEIVER_ID=greenhouse",
+            "rtl433/greenhouse/events",
+            "MQTT_BASE_TOPIC=valpo/geomet/rtl433/stippler",
+            "valpo/geomet/rtl433/stippler/devices/",
+            "RECEIVER_ID defaults to the host name",
+        ]
+        for text in examples:
+            with self.subTest(text=text):
+                self.assertIn(text, combined)

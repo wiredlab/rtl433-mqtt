@@ -55,23 +55,60 @@ Detailed installation, update, config, service, and log operations are in
 
 ## MQTT Topics
 
-By default, the base topic is:
+Topic construction starts with a base topic. If `MQTT_BASE_TOPIC` is set, that
+exact value is used. Otherwise the wrapper builds the base as:
 
 ```text
-rtl433/<hostname>
+${MQTT_TOPIC_PREFIX}/${RECEIVER_ID}
 ```
 
-The native `rtl_433` MQTT output publishes under that base:
+`RECEIVER_ID defaults to the host name` when it is blank.
+
+With the default config on a host named `stippler`:
 
 ```text
-rtl433/<hostname>/availability
-rtl433/<hostname>/events
-rtl433/<hostname>/states
-rtl433/<hostname>/devices/...
+rtl433/stippler
 ```
 
-Change the base with `MQTT_TOPIC_PREFIX`, `RECEIVER_ID`, or
-`MQTT_BASE_TOPIC`.
+publishes:
+
+```text
+rtl433/stippler/availability
+rtl433/stippler/events
+rtl433/stippler/states
+rtl433/stippler/devices/...
+```
+
+With a named receiver:
+
+```sh
+MQTT_TOPIC_PREFIX=rtl433
+RECEIVER_ID=greenhouse
+```
+
+publishes:
+
+```text
+rtl433/greenhouse/availability
+rtl433/greenhouse/events
+rtl433/greenhouse/states
+rtl433/greenhouse/devices/...
+```
+
+With a full site-specific override:
+
+```sh
+MQTT_BASE_TOPIC=valpo/geomet/rtl433/stippler
+```
+
+publishes:
+
+```text
+valpo/geomet/rtl433/stippler/availability
+valpo/geomet/rtl433/stippler/events
+valpo/geomet/rtl433/stippler/states
+valpo/geomet/rtl433/stippler/devices/
+```
 
 ## Local Logs
 
